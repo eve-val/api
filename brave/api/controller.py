@@ -40,9 +40,8 @@ class SignedController(Controller):
         hex_key = request.service.key.public.encode('utf-8')
         key = VerifyingKey.from_string(unhexlify(hex_key), curve=NIST256p, hashfunc=sha256)
         
-        log.debug("Canonical request:\n\n\"{r.headers[Date]}\n{r.url}\n{r.body}\"".format(r=request))
-
-        date = datetime.strptime(request.headers['Date'], '%a, %d %b %Y %H:%M:%S GMT')
+        date_fmt = '%a, %d %b %Y %H:%M:%S GMT'
+        date = datetime.strptime(request.headers['Date'], date_fmt)
         if datetime.utcnow() - date > timedelta(seconds=15):
             log.warning("Received request that is over 15 seconds old, rejecting.")
             raise HTTPBadRequest("Request over 15 seconds old.")
@@ -51,17 +50,18 @@ class SignedController(Controller):
             log.warning("Received a request from the future; please check this systems time for validity.")
             raise HTTPBadRequest("Request from the future, please check your time for validity.")
 
-        date = date - timedelta(seconds=1)
+        def verify_helper(date_string):
+            canon = "{date}\n{r.url}\n{r.body}".format(date=date_string, r=request)
+            log.debug("Canonical request:\n\n\"{}\"".format(canon))
+            return key.verify(
+                unhexlify(request.headers['X-Signature']),
+                canon)
 
         try:
-            key.verify(
-                unhexlify(request.headers['X-Signature']),
-                "{r.headers[Date]}\n{r.url}\n{r.body}".format(r=request))
+            verify_helper(request.headers['Date'])
         except BadSignatureError:
             try:
-                key.verify(
-                    unhexlify(request.headers['X-Signature']),
-                    "{date}\n{r.url}\n{r.body}".format(r=request, date=date.strftime('%a, %d %b %Y %H:%M:%S GMT')))
+                verify_helper((date - timedelta(seconds=1)).stftime(date_fmt))
             except BadSignatureError:
                 raise HTTPBadRequest("Invalid request signature.")
         

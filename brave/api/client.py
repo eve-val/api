@@ -69,10 +69,10 @@ class SignedAuth(AuthBase):
             return
         
         log.info("Validating %s request signature: %s", self.identity, response.headers['X-Signature'])
-        canon = "{ident}\n{r.headers[Date]}\n{r.url}\n{r.text}".format(ident=self.identity, r=response)
-        log.debug("Canonical data:\n%r", canon)
 
-        date = datetime.strptime(response.headers['Date'], '%a, %d %b %Y %H:%M:%S GMT')
+        date_fmt = '%a, %d %b %Y %H:%M:%S GMT'
+        date = datetime.strptime(response.headers['Date'], date_fmt)
+
         if datetime.utcnow() - date > timedelta(seconds=15):
             log.warning("Received response that is over 15 seconds old, rejecting.")
             raise BadSignatureError
@@ -80,23 +80,22 @@ class SignedAuth(AuthBase):
         if datetime.utcnow() - date < timedelta(seconds=0):
             log.warning("Received a request from the future; please check this systems time for validity.")
             raise BadSignatureError
-        
-        date = date - timedelta(seconds=1)
+
+        def verify_helper(date_string):
+            canon = "{ident}\n{date}\n{r.url}\n{r.text}".format(
+                ident=self.identity, date=date_string, r=response)
+            log.debug("Canonical data:\n%r", canon)
+            return self.public.verify(
+                    unhexlify(response.headers['X-Signature'].encode('utf-8')),
+                    canon.encode('utf-8'),
+                    hashfunc=sha256
+                )
 
         # Raises an exception on failure.
         try:
-            self.public.verify(
-                    unhexlify(response.headers['X-Signature'].encode('utf-8')),
-                    canon.encode('utf-8'),
-                    hashfunc=sha256
-                )
+            verify_helper(response.headers['Date'])
         except BadSignatureError:
-            canon = "{ident}\n{date}\n{r.url}\n{r.text}".format(ident=self.identity, r=response, date=date.strftime('%a, %d %b %Y %H:%M:%S GMT'))
-            self.public.verify(
-                    unhexlify(response.headers['X-Signature'].encode('utf-8')),
-                    canon.encode('utf-8'),
-                    hashfunc=sha256
-                )
+            self.verify_helper((date - timedelta(seconds=1)).strftime(date_fmt))
 
 
 class API(object):
